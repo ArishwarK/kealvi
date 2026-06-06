@@ -40,7 +40,7 @@ export default function QuestionsList({
 
       setQuestions(data.questions);
       setHasMore(data.hasMore);
-    }, 5000);
+    }, 2000);
 
     return () => clearInterval(interval);
   }, [query]);
@@ -61,6 +61,28 @@ export default function QuestionsList({
 
     return () => clearTimeout(id);
   }, [query]);
+
+  useEffect(() => {
+  let fetching = false;
+
+  const interval = setInterval(async () => {
+    if (fetching) return;
+
+    fetching = true;
+
+    try {
+      const res = await fetch("/api/questions");
+      const data = await res.json();
+
+      setQuestions(data.questions);
+      setHasMore(data.hasMore);
+    } finally {
+      fetching = false;
+    }
+  }, 2000);
+
+  return () => clearInterval(interval);
+}, []);
 
   async function submit() {
     if (!draft.trim()) return;

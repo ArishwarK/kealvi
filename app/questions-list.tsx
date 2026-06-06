@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { getVoterId } from "@/lib/voter";
+import VoteControls from "@/app/components/VoteControls";
 import {
   applyPinnedVotes,
   applyVoteOptimistic,
@@ -18,28 +19,18 @@ type Question = {
   userVote: UserVote;
 };
 
-const PINNED_VOTE_MS = 3000;
+const PINNED_VOTE_MS = 8000;
+const POLL_MS = 4000;
 
-function questionsUrl(query: string, voterId?: string, offset?: number) {
-  const params = new URLSearchParams();
-  if (query) params.set("q", query);
-  if (offset !== undefined) params.set("offset", String(offset));
-  if (voterId) params.set("voterId", voterId);
-  const qs = params.toString();
-  return qs ? `/api/questions?${qs}` : "/api/questions";
-}
-
-function visibleQuestionsUrl(
-  query: string,
+function buildUrl(
   voterId: string,
-  visibleIds: string[]
+  opts: { query?: string; offset?: number; ids?: string[] }
 ) {
-  if (query) return questionsUrl(query, voterId);
-  if (visibleIds.length === 0) return questionsUrl("", voterId);
-
   const params = new URLSearchParams();
-  params.set("ids", visibleIds.join(","));
   params.set("voterId", voterId);
+  if (opts.query) params.set("q", opts.query);
+  if (opts.offset !== undefined) params.set("offset", String(opts.offset));
+  if (opts.ids?.length) params.set("ids", opts.ids.join(","));
   return `/api/questions?${params.toString()}`;
 }
 
@@ -51,10 +42,7 @@ export default function QuestionsList({
   initialHasMore: boolean;
 }) {
   const [questions, setQuestions] = useState(() =>
-    initialQuestions.map((q) => ({
-      ...q,
-      userVote: q.userVote ?? null,
-    }))
+    initialQuestions.map((q) => ({ ...q, userVote: q.userVote ?? null }))
   );
   const [draft, setDraft] = useState("");
   const [query, setQuery] = useState("");
@@ -62,13 +50,12 @@ export default function QuestionsList({
   const [loading, setLoading] = useState(false);
   const [improving, setImproving] = useState(false);
   const [improveError, setImproveError] = useState<string | null>(null);
-  const [hydrated, setHydrated] = useState(false);
+  const [voteError, setVoteError] = useState<string | null>(null);
   const [voterId, setVoterId] = useState<string | null>(null);
   const [votingIds, setVotingIds] = useState<Set<string>>(() => new Set());
 
   const questionsRef = useRef(questions);
   questionsRef.current = questions;
-
   const queryRef = useRef(query);
   queryRef.current = query;
 
@@ -77,129 +64,119 @@ export default function QuestionsList({
     new Map<string, { votes: number; userVote: UserVote }>()
   );
   const votingRef = useRef(new Set<string>());
+  const mountedRef = useRef(false);
 
   useEffect(() => {
     setVoterId(getVoterId());
-    setHydrated(true);
   }, []);
 
-  const applyServerQuestions = useCallback((incoming: Question[]) => {
+  const applyIncoming = useCallback((incoming: Question[], replace = false) => {
+    const normalized = incoming.map((q) => ({
+      ...q,
+      userVote: q.userVote ?? null,
+    }));
+
     setQuestions((prev) =>
       applyPinnedVotes(
-        mergeQuestionList(prev, incoming),
+        replace ? normalized : mergeQuestionList(prev, normalized),
         pinnedVotesRef.current
       )
     );
   }, []);
 
-  const refreshQuestions = useCallback(
-    async (options?: { offset?: number; replace?: boolean }) => {
+  const syncQuestions = useCallback(
+    async (opts?: { replace?: boolean; offset?: number }) => {
       if (!voterId) return;
       if (votingRef.current.size > 0) return;
 
       const seq = ++fetchSeqRef.current;
-      const currentQuery = queryRef.current;
-      const visibleIds = questionsRef.current.map((q) => q.id);
+      const currentQuery = queryRef.current.trim();
 
-      const url =
-        options?.offset !== undefined
-          ? questionsUrl(currentQuery, voterId, options.offset)
-          : visibleQuestionsUrl(currentQuery, voterId, visibleIds);
-
-      const res = await fetch(url);
-      if (seq !== fetchSeqRef.current) return;
-
-      const data = await res.json();
-      const incoming = (data.questions ?? []).map((q: Question) => ({
-        ...q,
-        userVote: q.userVote ?? null,
-      }));
-
-      if (options?.replace) {
-        setQuestions(
-          applyPinnedVotes(incoming, pinnedVotesRef.current)
-        );
-      } else if (options?.offset !== undefined) {
-        setQuestions((prev) =>
-          applyPinnedVotes(
-            [
-              ...prev,
-              ...incoming.filter(
-                (q: Question) => !prev.some((p) => p.id === q.id)
-              ),
-            ],
-            pinnedVotesRef.current
-          )
-        );
-      } else {
-        applyServerQuestions(incoming);
-
-        if (!currentQuery && visibleIds.length > 0) {
-          const pageSeq = ++fetchSeqRef.current;
-          const pageRes = await fetch(questionsUrl("", voterId));
-          if (pageSeq !== fetchSeqRef.current) return;
-
-          const pageData = await pageRes.json();
-          const pageIncoming = (pageData.questions ?? []).map(
-            (q: Question) => ({
-              ...q,
-              userVote: q.userVote ?? null,
-            })
+      try {
+        if (opts?.offset !== undefined) {
+          const res = await fetch(
+            buildUrl(voterId, { offset: opts.offset, query: currentQuery })
           );
-          applyServerQuestions(pageIncoming);
+          if (seq !== fetchSeqRef.current) return;
+          const data = await res.json();
+          applyIncoming(data.questions ?? [], false);
+          if (data.hasMore !== undefined) setHasMore(data.hasMore);
+          return;
         }
-      }
 
-      if (data.hasMore !== undefined) {
-        setHasMore(data.hasMore);
+        if (currentQuery) {
+          const res = await fetch(buildUrl(voterId, { query: currentQuery }));
+          if (seq !== fetchSeqRef.current) return;
+          const data = await res.json();
+          applyIncoming(data.questions ?? [], opts?.replace ?? true);
+          setHasMore(false);
+          return;
+        }
+
+        const visibleIds = questionsRef.current.map((q) => q.id);
+        const requests: Promise<Response>[] = [
+          fetch(buildUrl(voterId, {})),
+        ];
+        if (visibleIds.length > 0) {
+          requests.push(fetch(buildUrl(voterId, { ids: visibleIds })));
+        }
+
+        const responses = await Promise.all(requests);
+        if (seq !== fetchSeqRef.current) return;
+
+        const [pageData, idsData] = await Promise.all(
+          responses.map((r) => r.json())
+        );
+
+        setQuestions((prev) => {
+          let next = mergeQuestionList(prev, pageData.questions ?? []);
+          if (idsData?.questions?.length) {
+            next = mergeQuestionList(next, idsData.questions);
+          }
+          return applyPinnedVotes(next, pinnedVotesRef.current);
+        });
+
+        if (pageData.hasMore !== undefined) setHasMore(pageData.hasMore);
+      } catch {
+        // ignore transient network errors during background sync
       }
     },
-    [voterId, applyServerQuestions]
+    [voterId, applyIncoming]
   );
 
-  // Auto refresh every 2 seconds
   useEffect(() => {
     if (!voterId) return;
+    syncQuestions({ replace: !mountedRef.current });
+    mountedRef.current = true;
+  }, [voterId, syncQuestions]);
 
-    const interval = setInterval(() => {
-      refreshQuestions();
-    }, 2000);
-
+  useEffect(() => {
+    if (!voterId) return;
+    const interval = setInterval(() => syncQuestions(), POLL_MS);
     return () => clearInterval(interval);
-  }, [voterId, refreshQuestions]);
+  }, [voterId, syncQuestions]);
 
-  // Search debounce
   useEffect(() => {
     if (!voterId) return;
-
-    const id = setTimeout(() => {
-      refreshQuestions({ replace: true });
+    const timer = setTimeout(() => {
+      syncQuestions({ replace: true });
     }, 300);
-
-    return () => clearTimeout(id);
-  }, [query, voterId, refreshQuestions]);
+    return () => clearTimeout(timer);
+  }, [query, voterId, syncQuestions]);
 
   async function improveDraft() {
     if (!draft.trim() || improving) return;
-
     setImproving(true);
     setImproveError(null);
 
     try {
       const res = await fetch("/api/improve-question", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question: draft }),
       });
-
       const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error ?? "Failed to improve question");
-      }
-
+      if (!res.ok) throw new Error(data.error ?? "Failed to improve question");
       setDraft(data.improved);
     } catch (error) {
       setImproveError(
@@ -215,21 +192,15 @@ export default function QuestionsList({
 
     const res = await fetch("/api/questions", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        body: draft,
-      }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: draft }),
     });
 
     const created = await res.json();
-
     setQuestions((qs) => [
       { ...created, votes: 0, userVote: null },
       ...qs,
     ]);
-
     setDraft("");
   }
 
@@ -238,6 +209,7 @@ export default function QuestionsList({
 
     votingRef.current.add(id);
     setVotingIds(new Set(votingRef.current));
+    setVoteError(null);
     fetchSeqRef.current++;
 
     let previous: Question | undefined;
@@ -253,24 +225,18 @@ export default function QuestionsList({
     try {
       const res = await fetch(`/api/questions/${id}/vote`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          voterId,
-          direction,
-        }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ voterId, direction }),
       });
 
       const data = await res.json();
-
       if (!res.ok) {
         throw new Error(data.error ?? "Failed to cast vote");
       }
 
       const authoritative = {
-        votes: data.score as number,
-        userVote: data.userVote as UserVote,
+        votes: Number(data.score),
+        userVote: (data.userVote ?? null) as UserVote,
       };
 
       pinnedVotesRef.current.set(id, authoritative);
@@ -288,9 +254,11 @@ export default function QuestionsList({
           qs.map((q) => (q.id === id ? previous! : q))
         );
       }
-      if (process.env.NODE_ENV !== "production") {
-        console.debug("[vote] client error", { id, direction, error });
-      }
+      setVoteError(
+        error instanceof Error
+          ? error.message
+          : "Vote failed. Check your database migration."
+      );
     } finally {
       votingRef.current.delete(id);
       setVotingIds(new Set(votingRef.current));
@@ -299,114 +267,125 @@ export default function QuestionsList({
 
   async function loadMore() {
     setLoading(true);
-    await refreshQuestions({ offset: questions.length });
+    await syncQuestions({ offset: questions.length });
     setLoading(false);
   }
 
   return (
-    <div className="space-y-4">
-      <p className="text-sm text-gray-500">
-        {hydrated
-          ? "Interactive ✓"
-          : "Loading interactivity…"}
-      </p>
+    <div className="space-y-8">
+      <div className="live-badge">
+        <span className="relative flex h-2 w-2">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-60" />
+          <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
+        </span>
+        Live — updates every few seconds
+      </div>
 
-      <div className="space-y-2">
-        <div className="flex gap-2">
-          <input
-            value={draft}
-            onChange={(e) => {
-              setDraft(e.target.value);
-              setImproveError(null);
-            }}
-            placeholder="Ask a question..."
-            className="flex-1 rounded-md border px-3 py-2"
-          />
-
+      <div className="space-y-3">
+        <label htmlFor="question-draft" className="section-subtitle block font-semibold text-primary-dark">
+          Ask a question
+        </label>
+        <textarea
+          id="question-draft"
+          value={draft}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            setImproveError(null);
+          }}
+          placeholder="Type your question here…"
+          rows={2}
+          className="input-field resize-none"
+        />
+        <div className="flex flex-wrap gap-2">
           <button
             type="button"
             onClick={improveDraft}
             disabled={!draft.trim() || improving}
-            className="rounded-md border px-4 py-2 disabled:cursor-not-allowed disabled:opacity-50"
+            className="btn-secondary"
           >
-            {improving ? "Improving..." : "Improve with AI"}
+            {improving ? "Improving…" : "Improve with AI"}
           </button>
-
           <button
+            type="button"
             onClick={submit}
             disabled={!draft.trim()}
-            className="rounded-md border px-4 py-2 disabled:cursor-not-allowed disabled:opacity-50"
+            className="btn-primary"
           >
-            Ask
+            Post question
           </button>
         </div>
-
         {improveError && (
-          <p className="text-sm text-red-600">{improveError}</p>
+          <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-danger">
+            {improveError}
+          </p>
         )}
       </div>
 
-      <input
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search questions..."
-        className="w-full rounded-md border px-3 py-2"
-      />
+      <div className="space-y-3">
+        <label htmlFor="question-search" className="section-subtitle block font-semibold text-primary-dark">
+          Search
+        </label>
+        <input
+          id="question-search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Find a question…"
+          className="input-field"
+        />
+      </div>
 
-      <ul className="space-y-3">
-        {questions.map((q) => (
-          <li
-            key={q.id}
-            className="flex items-center gap-3 rounded-lg border p-3"
-          >
-            <div className="flex flex-col items-center gap-1">
-              <button
-                type="button"
-                onClick={() => vote(q.id, "up")}
+      {voteError && (
+        <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-danger">
+          {voteError}
+        </p>
+      )}
+
+      <div className="space-y-3">
+        <p className="text-sm font-semibold text-primary-dark">
+          {questions.length} question{questions.length !== 1 ? "s" : ""}
+        </p>
+
+        <ul className="space-y-3">
+          {questions.map((q) => (
+            <li key={q.id} className="question-item">
+              <VoteControls
+                votes={q.votes}
+                userVote={q.userVote}
                 disabled={votingIds.has(q.id)}
-                aria-label="Upvote"
-                aria-pressed={q.userVote === 1}
-                className={`rounded-md border px-3 py-1 font-mono disabled:opacity-50 ${
-                  q.userVote === 1
-                    ? "border-green-600 bg-green-50 text-green-700"
-                    : ""
-                }`}
-              >
-                ▲
-              </button>
+                onVote={(direction) => vote(q.id, direction)}
+              />
+              <div className="min-w-0 flex-1 pt-1">
+                <p className="text-base leading-relaxed text-foreground">
+                  {q.body}
+                </p>
+                {q.author && (
+                  <p className="mt-2 text-xs text-muted">— {q.author}</p>
+                )}
+              </div>
+            </li>
+          ))}
 
-              <span className="min-w-[2ch] text-center font-mono text-sm">
-                {q.votes}
-              </span>
+          {questions.length === 0 && (
+            <li className="rounded-2xl border border-dashed border-border bg-white/70 px-6 py-16 text-center">
+              <p className="text-lg font-semibold text-primary-dark">
+                No questions yet
+              </p>
+              <p className="mt-1 text-sm text-muted">
+                Be the first to start the conversation.
+              </p>
+            </li>
+          )}
+        </ul>
+      </div>
 
-              <button
-                type="button"
-                onClick={() => vote(q.id, "down")}
-                disabled={votingIds.has(q.id)}
-                aria-label="Downvote"
-                aria-pressed={q.userVote === -1}
-                className={`rounded-md border px-3 py-1 font-mono disabled:opacity-50 ${
-                  q.userVote === -1
-                    ? "border-red-600 bg-red-50 text-red-700"
-                    : ""
-                }`}
-              >
-                ▼
-              </button>
-            </div>
-
-            <span>{q.body}</span>
-          </li>
-        ))}
-      </ul>
-
-      {hasMore && (
+      {hasMore && !query && (
         <button
+          type="button"
           onClick={loadMore}
           disabled={loading}
-          className="rounded-md border px-4 py-2 disabled:opacity-50"
+          className="btn-secondary w-full"
         >
-          {loading ? "Loading..." : "Load more"}
+          {loading ? "Loading…" : "Load more questions"}
         </button>
       )}
     </div>

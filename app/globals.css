@@ -1,18 +1,95 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #e8f1ff;
+  --foreground: #0c1929;
+  --surface: #ffffff;
+  --primary: #1d6ef0;
+  --primary-dark: #1558c0;
+  --primary-light: #d6e8ff;
+  --primary-muted: #f4f8ff;
+  --border: #c5dcff;
+  --muted: #5a7291;
+  --danger: #dc2626;
+  --shadow: 0 8px 30px rgba(29, 110, 240, 0.08);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-primary: var(--primary);
+  --color-primary-dark: var(--primary-dark);
+  --color-primary-light: var(--primary-light);
+  --color-primary-muted: var(--primary-muted);
+  --color-border: var(--border);
+  --color-muted: var(--muted);
+  --color-danger: var(--danger);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
 body {
-  background: var(--background);
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -10%, #bfd9ff 0%, transparent 55%),
+    linear-gradient(180deg, #f4f8ff 0%, var(--background) 100%);
   color: var(--foreground);
+  min-height: 100vh;
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-border bg-surface;
+    box-shadow: var(--shadow);
+  }
+
+  .input-field {
+    @apply w-full rounded-xl border border-border bg-white px-4 py-3 text-foreground outline-none transition placeholder:text-muted focus:border-primary focus:ring-4 focus:ring-primary/15;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center rounded-xl bg-primary px-5 py-3 font-semibold text-white transition hover:bg-primary-dark active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50;
+    box-shadow: 0 4px 14px rgba(29, 110, 240, 0.35);
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center rounded-xl border border-border bg-white px-5 py-3 font-semibold text-primary transition hover:border-primary hover:bg-primary-muted active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .section-title {
+    @apply text-2xl font-bold tracking-tight text-primary-dark;
+  }
+
+  .section-subtitle {
+    @apply text-sm leading-relaxed text-muted;
+  }
+
+  .vote-stack {
+    @apply flex shrink-0 flex-col items-center gap-0.5 rounded-2xl border border-border bg-white p-1.5;
+    box-shadow: 0 2px 8px rgba(29, 110, 240, 0.06);
+  }
+
+  .vote-btn {
+    @apply flex h-9 w-9 items-center justify-center rounded-xl text-muted transition hover:bg-primary-light hover:text-primary disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .vote-btn-active-up {
+    @apply bg-primary text-white shadow-sm hover:bg-primary hover:text-white;
+  }
+
+  .vote-btn-active-down {
+    @apply bg-primary-dark text-white shadow-sm hover:bg-primary-dark hover:text-white;
+  }
+
+  .vote-count {
+    @apply min-w-[2.5rem] py-0.5 text-center font-mono text-sm font-bold text-muted;
+  }
+
+  .question-item {
+    @apply flex items-start gap-4 rounded-2xl border border-border bg-white/90 p-5 transition hover:border-primary/50 hover:shadow-md;
+  }
+
+  .live-badge {
+    @apply inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary-light/60 px-3 py-1 text-xs font-semibold text-primary-dark;
+  }
 }

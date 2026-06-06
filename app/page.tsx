@@ -1,30 +1,45 @@
 import QuestionsList from "./questions-list";
 import { getQuestionsPage } from "@/lib/questions";
-import Link from "next/link";
 import PollsSection from "./components/PollsSection";
-// Render on every request (don't cache/prerender) so new questions show up.
+
 export const dynamic = "force-dynamic";
 
 const PAGE_SIZE = 10;
 
-// Server component — runs only on the server, awaits the data, renders to HTML.
 export default async function Page() {
   const { questions, hasMore } = await getQuestionsPage(0, PAGE_SIZE);
 
   return (
-  <main className="mx-auto max-w-4xl p-6">
-    <h1 className="mb-4 text-3xl font-bold">
-      Live Q&A
-    </h1>
+    <div className="mx-auto max-w-3xl px-5 py-10">
+      <section className="mb-10 text-center sm:text-left">
+        <p className="mb-3 inline-flex rounded-full bg-primary-light px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-primary-dark">
+          Live session
+        </p>
+        <h1 className="mb-3 text-4xl font-bold tracking-tight text-primary-dark sm:text-5xl">
+          Ask. Vote. Engage.
+        </h1>
+        <p className="mx-auto max-w-lg text-base leading-relaxed text-muted sm:mx-0">
+          Submit questions, polish them with AI, and upvote the best ones —
+          all in real time.
+        </p>
+      </section>
 
-    <QuestionsList
-      initialQuestions={questions}
-      initialHasMore={hasMore}
-    />
+      <section className="card mb-14 p-6 sm:p-8">
+        <QuestionsList
+          initialQuestions={questions}
+          initialHasMore={hasMore}
+        />
+      </section>
 
-    <div className="my-10 border-t" />
+      <div className="mb-10 flex items-center gap-4">
+        <div className="h-px flex-1 bg-gradient-to-r from-transparent via-border to-transparent" />
+        <span className="text-sm font-bold uppercase tracking-wider text-primary">
+          Polls
+        </span>
+        <div className="h-px flex-1 bg-gradient-to-r from-transparent via-border to-transparent" />
+      </div>
 
-    <PollsSection />
-  </main>
-);
+      <PollsSection />
+    </div>
+  );
 }

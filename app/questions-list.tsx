@@ -23,13 +23,17 @@ export default function QuestionsList({
   const [hasMore, setHasMore] = useState(initialHasMore);
   const [loading, setLoading] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  const [pollingEnabled, setPollingEnabled] = useState(true);
+  const [newUpdates, setNewUpdates] = useState(0);
 
   useEffect(() => {
     setHydrated(true);
   }, []);
 
-  // Auto refresh every 5 seconds
+  // Auto refresh every 5 seconds when polling is enabled
   useEffect(() => {
+    if (!pollingEnabled) return;
+
     const interval = setInterval(async () => {
       const url = query
         ? `/api/questions?q=${encodeURIComponent(query)}`
@@ -38,12 +42,19 @@ export default function QuestionsList({
       const res = await fetch(url);
       const data = await res.json();
 
+      const oldCount = questions.length;
+      const newCount = data.questions.length;
+
+      if (newCount > oldCount) {
+        setNewUpdates(newCount - oldCount);
+      }
+
       setQuestions(data.questions);
       setHasMore(data.hasMore);
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [query]);
+  }, [query, pollingEnabled, questions.length]);
 
   // Search
   useEffect(() => {
@@ -136,6 +147,36 @@ export default function QuestionsList({
   return (
     <div className="space-y-6">
       <div className="space-y-4">
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                setPollingEnabled(!pollingEnabled);
+                setNewUpdates(0);
+              }}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition ${
+                pollingEnabled
+                  ? "bg-success text-white shadow-lg"
+                  : "border border-border text-muted hover:border-accent hover:text-accent"
+              }`}
+            >
+              <span className={`inline-block w-2 h-2 rounded-full ${pollingEnabled ? "animate-pulse" : ""}`}></span>
+              {pollingEnabled ? "Auto-refresh on" : "Auto-refresh off"}
+            </button>
+            {newUpdates > 0 && (
+              <button
+                onClick={() => {
+                  setNewUpdates(0);
+                  setQuestions([...questions]);
+                }}
+                className="px-4 py-2 rounded-lg bg-accent text-white font-medium hover:bg-accent-dark transition shadow-lg"
+              >
+                {newUpdates} new update{newUpdates !== 1 ? "s" : ""}
+              </button>
+            )}
+          </div>
+        </div>
+
         <div className="flex gap-3">
           <input
             value={draft}

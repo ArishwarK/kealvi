@@ -22,6 +22,8 @@ export default function QuestionsList({
   const [query, setQuery] = useState("");
   const [hasMore, setHasMore] = useState(initialHasMore);
   const [loading, setLoading] = useState(false);
+  const [improving, setImproving] = useState(false);
+  const [improveError, setImproveError] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
@@ -83,6 +85,37 @@ export default function QuestionsList({
 
   return () => clearInterval(interval);
 }, []);
+
+  async function improveDraft() {
+    if (!draft.trim() || improving) return;
+
+    setImproving(true);
+    setImproveError(null);
+
+    try {
+      const res = await fetch("/api/improve-question", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ question: draft }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error ?? "Failed to improve question");
+      }
+
+      setDraft(data.improved);
+    } catch (error) {
+      setImproveError(
+        error instanceof Error ? error.message : "Failed to improve question"
+      );
+    } finally {
+      setImproving(false);
+    }
+  }
 
   async function submit() {
     if (!draft.trim()) return;
@@ -163,20 +196,39 @@ export default function QuestionsList({
           : "Loading interactivity…"}
       </p>
 
-      <div className="flex gap-2">
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder="Ask a question..."
-          className="flex-1 rounded-md border px-3 py-2"
-        />
+      <div className="space-y-2">
+        <div className="flex gap-2">
+          <input
+            value={draft}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              setImproveError(null);
+            }}
+            placeholder="Ask a question..."
+            className="flex-1 rounded-md border px-3 py-2"
+          />
 
-        <button
-          onClick={submit}
-          className="rounded-md border px-4 py-2"
-        >
-          Ask
-        </button>
+          <button
+            type="button"
+            onClick={improveDraft}
+            disabled={!draft.trim() || improving}
+            className="rounded-md border px-4 py-2 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {improving ? "Improving..." : "Improve with AI"}
+          </button>
+
+          <button
+            onClick={submit}
+            disabled={!draft.trim()}
+            className="rounded-md border px-4 py-2 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Ask
+          </button>
+        </div>
+
+        {improveError && (
+          <p className="text-sm text-red-600">{improveError}</p>
+        )}
       </div>
 
       <input

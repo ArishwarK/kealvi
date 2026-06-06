@@ -134,62 +134,74 @@ export default function QuestionsList({
   }
 
   return (
-    <div className="space-y-4">
-      <p className="text-sm text-gray-500">
-        {hydrated
-          ? "Interactive ✓"
-          : "Loading interactivity…"}
-      </p>
+    <div className="space-y-6">
+      <div className="space-y-4">
+        <div className="flex gap-3">
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="Ask a question..."
+            className="flex-1 rounded-lg border border-border bg-background px-4 py-3 text-foreground placeholder:text-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent focus:ring-opacity-20 transition"
+          />
 
-      <div className="flex gap-2">
+          <button
+            onClick={submit}
+            className="rounded-lg bg-accent hover:bg-accent-dark text-white px-6 py-3 font-medium transition shadow-lg hover:shadow-xl"
+          >
+            Ask
+          </button>
+        </div>
+
         <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder="Ask a question..."
-          className="flex-1 rounded-md border px-3 py-2"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search questions..."
+          className="w-full rounded-lg border border-border bg-background px-4 py-3 text-foreground placeholder:text-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent focus:ring-opacity-20 transition"
         />
-
-        <button
-          onClick={submit}
-          className="rounded-md border px-4 py-2"
-        >
-          Ask
-        </button>
       </div>
 
-      <input
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search questions..."
-        className="w-full rounded-md border px-3 py-2"
-      />
+      <div className="space-y-3">
+        {questions.length === 0 ? (
+          <div className="text-center py-12">
+            <p className="text-muted text-lg">No questions yet. Be the first to ask!</p>
+          </div>
+        ) : (
+          <ul className="space-y-3">
+            {questions.map((q) => (
+              <li
+                key={q.id}
+                className="group flex items-start gap-4 rounded-lg border border-border bg-gradient-to-br from-background to-background hover:border-accent hover:shadow-lg p-4 transition"
+              >
+                <button
+                  onClick={() => upvote(q.id)}
+                  className="flex-shrink-0 rounded-lg border border-border hover:border-accent hover:bg-accent hover:text-white px-3 py-2 font-mono text-sm text-accent font-semibold transition flex flex-col items-center min-w-[60px]"
+                >
+                  <span className="text-lg">▲</span>
+                  <span>{q.votes}</span>
+                </button>
 
-      <ul className="space-y-3">
-        {questions.map((q) => (
-          <li
-            key={q.id}
-            className="flex items-center gap-3 rounded-lg border p-3"
-          >
-            <button
-              onClick={() => upvote(q.id)}
-              className="rounded-md border px-3 py-1 font-mono"
-            >
-              ▲ {q.votes}
-            </button>
-
-            <span>{q.body}</span>
-          </li>
-        ))}
-      </ul>
+                <div className="flex-1 min-w-0">
+                  <p className="text-foreground break-words">{q.body}</p>
+                  {q.author && (
+                    <p className="mt-2 text-sm text-muted">By {q.author}</p>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
 
       {hasMore && (
-        <button
-          onClick={loadMore}
-          disabled={loading}
-          className="rounded-md border px-4 py-2 disabled:opacity-50"
-        >
-          {loading ? "Loading..." : "Load more"}
-        </button>
+        <div className="flex justify-center pt-4">
+          <button
+            onClick={loadMore}
+            disabled={loading}
+            className="rounded-lg border border-border hover:border-accent text-accent hover:bg-accent hover:text-white px-6 py-3 font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading ? "Loading..." : "Load more questions"}
+          </button>
+        </div>
       )}
     </div>
   );

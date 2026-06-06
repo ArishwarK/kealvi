@@ -1,5 +1,6 @@
 import { supabase } from "@/lib/supabase";
 import {
+  getQuestionScores,
   getUserVotesForQuestions,
   type UserVote,
 } from "@/lib/votes";
@@ -12,28 +13,24 @@ export type QuestionRow = {
   userVote: UserVote;
 };
 
-function scoreFromVotes(
-  votes: { value: number }[] | null | undefined
-): number {
-  return (votes ?? []).reduce((sum, vote) => sum + vote.value, 0);
-}
-
-async function attachUserVotes(
-  rows: Omit<QuestionRow, "userVote">[],
+async function attachScoresAndUserVotes(
+  rows: Omit<QuestionRow, "votes" | "userVote">[],
   voterId?: string
 ): Promise<QuestionRow[]> {
-  if (!voterId || rows.length === 0) {
-    return rows.map((row) => ({ ...row, userVote: null }));
-  }
+  if (rows.length === 0) return [];
 
-  const userVotes = await getUserVotesForQuestions(
-    rows.map((row) => row.id),
+  const ids = rows.map((row) => row.id);
+  const [scores, userVotes] = await Promise.all([
+    getQuestionScores(ids),
     voterId
-  );
+      ? getUserVotesForQuestions(ids, voterId)
+      : Promise.resolve({} as Record<string, UserVote>),
+  ]);
 
   return rows.map((row) => ({
     ...row,
-    userVote: userVotes[row.id] ?? null,
+    votes: scores[row.id] ?? 0,
+    userVote: voterId ? (userVotes[row.id] ?? null) : null,
   }));
 }
 
@@ -44,7 +41,7 @@ export async function getQuestionsPage(
 ) {
   const { data, error } = await supabase
     .from("questions")
-    .select("id, body, author, created_at, votes(value)")
+    .select("id, body, author, created_at")
     .order("created_at", { ascending: false })
     .range(offset, offset + limit); // inclusive → asks for limit + 1 rows
 
@@ -54,11 +51,13 @@ export async function getQuestionsPage(
     id: q.id,
     body: q.body,
     author: q.author,
-    votes: scoreFromVotes(q.votes),
   }));
 
-  const hasMore = rows.length > limit; // got the extra row? there's a next page
-  const questions = await attachUserVotes(rows.slice(0, limit), voterId);
+  const hasMore = rows.length > limit;
+  const questions = await attachScoresAndUserVotes(
+    rows.slice(0, limit),
+    voterId
+  );
   return { questions, hasMore };
 }
 
@@ -69,7 +68,7 @@ export async function searchQuestions(
 ) {
   const { data, error } = await supabase
     .from("questions")
-    .select("id, body, author, created_at, votes(value)")
+    .select("id, body, author, created_at")
     .textSearch("body", q, { type: "websearch", config: "english" })
     .limit(limit);
 
@@ -79,8 +78,31 @@ export async function searchQuestions(
     id: row.id,
     body: row.body,
     author: row.author,
-    votes: scoreFromVotes(row.votes),
   }));
 
-  return attachUserVotes(rows, voterId);
+  return attachScoresAndUserVotes(rows, voterId);
+}
+
+export async function getQuestionsByIds(ids: string[], voterId?: string) {
+  if (ids.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from("questions")
+    .select("id, body, author, created_at")
+    .in("id", ids);
+
+  if (error) throw new Error(error.message);
+
+  const byId = new Map(
+    (data ?? []).map((row) => [
+      row.id,
+      { id: row.id, body: row.body, author: row.author },
+    ])
+  );
+
+  const ordered = ids
+    .map((id) => byId.get(id))
+    .filter((row): row is NonNullable<typeof row> => row !== undefined);
+
+  return attachScoresAndUserVotes(ordered, voterId);
 }

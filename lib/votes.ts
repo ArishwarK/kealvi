@@ -1,21 +1,46 @@
 import { supabase } from "@/lib/supabase";
+import {
+  directionToValue,
+  normalizeVoteValue,
+  type UserVote,
+  type VoteDirection,
+} from "@/lib/vote-utils";
 
-export type VoteDirection = "up" | "down";
-export type UserVote = 1 | -1 | null;
+export type { UserVote, VoteDirection } from "@/lib/vote-utils";
 
-function directionToValue(direction: VoteDirection): 1 | -1 {
-  return direction === "up" ? 1 : -1;
+const isDev = process.env.NODE_ENV !== "production";
+
+function logVote(event: string, details: Record<string, unknown>) {
+  if (isDev) {
+    console.debug("[vote]", event, details);
+  }
 }
 
-export async function getQuestionScore(questionId: string): Promise<number> {
+export async function getQuestionScores(
+  questionIds: string[]
+): Promise<Record<string, number>> {
+  const scores: Record<string, number> = {};
+  for (const id of questionIds) scores[id] = 0;
+  if (questionIds.length === 0) return scores;
+
   const { data, error } = await supabase
     .from("votes")
-    .select("value")
-    .eq("question_id", questionId);
+    .select("question_id, value")
+    .in("question_id", questionIds);
 
   if (error) throw new Error(error.message);
 
-  return (data ?? []).reduce((sum, row) => sum + row.value, 0);
+  for (const row of data ?? []) {
+    const id = row.question_id as string;
+    scores[id] = (scores[id] ?? 0) + normalizeVoteValue(row.value);
+  }
+
+  return scores;
+}
+
+export async function getQuestionScore(questionId: string): Promise<number> {
+  const scores = await getQuestionScores([questionId]);
+  return scores[questionId] ?? 0;
 }
 
 export async function getUserVote(
@@ -32,7 +57,7 @@ export async function getUserVote(
   if (error) throw new Error(error.message);
   if (!data) return null;
 
-  return data.value === -1 ? -1 : 1;
+  return normalizeVoteValue(data.value);
 }
 
 export async function getUserVotesForQuestions(
@@ -51,7 +76,7 @@ export async function getUserVotesForQuestions(
 
   const result: Record<string, UserVote> = {};
   for (const row of data ?? []) {
-    result[row.question_id] = row.value === -1 ? -1 : 1;
+    result[row.question_id] = normalizeVoteValue(row.value);
   }
   return result;
 }
@@ -72,6 +97,17 @@ export async function castVote(
 
   if (fetchError) throw new Error(fetchError.message);
 
+  const existingValue = existing
+    ? normalizeVoteValue(existing.value)
+    : null;
+
+  logVote("cast:start", {
+    questionId,
+    voterId,
+    direction,
+    existingValue,
+  });
+
   if (!existing) {
     const { error } = await supabase.from("votes").insert({
       question_id: questionId,
@@ -79,7 +115,7 @@ export async function castVote(
       value: requested,
     });
     if (error) throw new Error(error.message);
-  } else if (existing.value === requested) {
+  } else if (existingValue === requested) {
     const { error } = await supabase
       .from("votes")
       .delete()
@@ -97,6 +133,8 @@ export async function castVote(
     getQuestionScore(questionId),
     getUserVote(questionId, voterId),
   ]);
+
+  logVote("cast:done", { questionId, voterId, score, userVote });
 
   return { score, userVote };
 }

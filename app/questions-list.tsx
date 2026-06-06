@@ -1,39 +1,24 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { getVoterId } from "@/lib/voter";
+import {
+  applyPinnedVotes,
+  applyVoteOptimistic,
+  mergeQuestionList,
+  type VoteDirection,
+} from "@/lib/vote-client";
+import type { UserVote } from "@/lib/votes";
 
 type Question = {
   id: string;
   body: string;
   author: string | null;
   votes: number;
-  userVote: 1 | -1 | null;
+  userVote: UserVote;
 };
 
-type VoteDirection = "up" | "down";
-
-function applyVoteOptimistic(
-  question: Question,
-  direction: VoteDirection
-): Question {
-  const requested = direction === "up" ? 1 : -1;
-  const { userVote, votes } = question;
-
-  if (userVote === null) {
-    return { ...question, votes: votes + requested, userVote: requested };
-  }
-
-  if (userVote === requested) {
-    return { ...question, votes: votes - requested, userVote: null };
-  }
-
-  return {
-    ...question,
-    votes: votes - userVote + requested,
-    userVote: requested,
-  };
-}
+const PINNED_VOTE_MS = 3000;
 
 function questionsUrl(query: string, voterId?: string, offset?: number) {
   const params = new URLSearchParams();
@@ -42,6 +27,20 @@ function questionsUrl(query: string, voterId?: string, offset?: number) {
   if (voterId) params.set("voterId", voterId);
   const qs = params.toString();
   return qs ? `/api/questions?${qs}` : "/api/questions";
+}
+
+function visibleQuestionsUrl(
+  query: string,
+  voterId: string,
+  visibleIds: string[]
+) {
+  if (query) return questionsUrl(query, voterId);
+  if (visibleIds.length === 0) return questionsUrl("", voterId);
+
+  const params = new URLSearchParams();
+  params.set("ids", visibleIds.join(","));
+  params.set("voterId", voterId);
+  return `/api/questions?${params.toString()}`;
 }
 
 export default function QuestionsList({
@@ -65,45 +64,120 @@ export default function QuestionsList({
   const [improveError, setImproveError] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [voterId, setVoterId] = useState<string | null>(null);
+  const [votingIds, setVotingIds] = useState<Set<string>>(() => new Set());
+
+  const questionsRef = useRef(questions);
+  questionsRef.current = questions;
+
+  const queryRef = useRef(query);
+  queryRef.current = query;
+
+  const fetchSeqRef = useRef(0);
+  const pinnedVotesRef = useRef(
+    new Map<string, { votes: number; userVote: UserVote }>()
+  );
+  const votingRef = useRef(new Set<string>());
 
   useEffect(() => {
     setVoterId(getVoterId());
     setHydrated(true);
   }, []);
 
-  async function fetchQuestions(url: string) {
-    const res = await fetch(url);
-    const data = await res.json();
-    setQuestions(
-      (data.questions ?? []).map((q: Question) => ({
+  const applyServerQuestions = useCallback((incoming: Question[]) => {
+    setQuestions((prev) =>
+      applyPinnedVotes(
+        mergeQuestionList(prev, incoming),
+        pinnedVotesRef.current
+      )
+    );
+  }, []);
+
+  const refreshQuestions = useCallback(
+    async (options?: { offset?: number; replace?: boolean }) => {
+      if (!voterId) return;
+      if (votingRef.current.size > 0) return;
+
+      const seq = ++fetchSeqRef.current;
+      const currentQuery = queryRef.current;
+      const visibleIds = questionsRef.current.map((q) => q.id);
+
+      const url =
+        options?.offset !== undefined
+          ? questionsUrl(currentQuery, voterId, options.offset)
+          : visibleQuestionsUrl(currentQuery, voterId, visibleIds);
+
+      const res = await fetch(url);
+      if (seq !== fetchSeqRef.current) return;
+
+      const data = await res.json();
+      const incoming = (data.questions ?? []).map((q: Question) => ({
         ...q,
         userVote: q.userVote ?? null,
-      }))
-    );
-    setHasMore(data.hasMore ?? false);
-  }
+      }));
+
+      if (options?.replace) {
+        setQuestions(
+          applyPinnedVotes(incoming, pinnedVotesRef.current)
+        );
+      } else if (options?.offset !== undefined) {
+        setQuestions((prev) =>
+          applyPinnedVotes(
+            [
+              ...prev,
+              ...incoming.filter(
+                (q: Question) => !prev.some((p) => p.id === q.id)
+              ),
+            ],
+            pinnedVotesRef.current
+          )
+        );
+      } else {
+        applyServerQuestions(incoming);
+
+        if (!currentQuery && visibleIds.length > 0) {
+          const pageSeq = ++fetchSeqRef.current;
+          const pageRes = await fetch(questionsUrl("", voterId));
+          if (pageSeq !== fetchSeqRef.current) return;
+
+          const pageData = await pageRes.json();
+          const pageIncoming = (pageData.questions ?? []).map(
+            (q: Question) => ({
+              ...q,
+              userVote: q.userVote ?? null,
+            })
+          );
+          applyServerQuestions(pageIncoming);
+        }
+      }
+
+      if (data.hasMore !== undefined) {
+        setHasMore(data.hasMore);
+      }
+    },
+    [voterId, applyServerQuestions]
+  );
 
   // Auto refresh every 2 seconds
   useEffect(() => {
     if (!voterId) return;
 
     const interval = setInterval(() => {
-      fetchQuestions(questionsUrl(query, voterId));
+      refreshQuestions();
     }, 2000);
 
     return () => clearInterval(interval);
-  }, [query, voterId]);
+  }, [voterId, refreshQuestions]);
 
   // Search debounce
   useEffect(() => {
     if (!voterId) return;
 
     const id = setTimeout(() => {
-      fetchQuestions(questionsUrl(query, voterId));
+      refreshQuestions({ replace: true });
     }, 300);
 
     return () => clearTimeout(id);
-  }, [query, voterId]);
+  }, [query, voterId, refreshQuestions]);
 
   async function improveDraft() {
     if (!draft.trim() || improving) return;
@@ -160,7 +234,11 @@ export default function QuestionsList({
   }
 
   async function vote(id: string, direction: VoteDirection) {
-    if (!voterId) return;
+    if (!voterId || votingRef.current.has(id)) return;
+
+    votingRef.current.add(id);
+    setVotingIds(new Set(votingRef.current));
+    fetchSeqRef.current++;
 
     let previous: Question | undefined;
 
@@ -168,58 +246,60 @@ export default function QuestionsList({
       qs.map((q) => {
         if (q.id !== id) return q;
         previous = q;
-        return applyVoteOptimistic(q, direction);
+        return { ...q, ...applyVoteOptimistic(q, direction) };
       })
     );
 
-    const res = await fetch(`/api/questions/${id}/vote`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        voterId,
-        direction,
-      }),
-    });
+    try {
+      const res = await fetch(`/api/questions/${id}/vote`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          voterId,
+          direction,
+        }),
+      });
 
-    if (!res.ok) {
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error ?? "Failed to cast vote");
+      }
+
+      const authoritative = {
+        votes: data.score as number,
+        userVote: data.userVote as UserVote,
+      };
+
+      pinnedVotesRef.current.set(id, authoritative);
+
+      setQuestions((qs) =>
+        qs.map((q) => (q.id === id ? { ...q, ...authoritative } : q))
+      );
+
+      window.setTimeout(() => {
+        pinnedVotesRef.current.delete(id);
+      }, PINNED_VOTE_MS);
+    } catch (error) {
       if (previous) {
         setQuestions((qs) =>
           qs.map((q) => (q.id === id ? previous! : q))
         );
       }
-      return;
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("[vote] client error", { id, direction, error });
+      }
+    } finally {
+      votingRef.current.delete(id);
+      setVotingIds(new Set(votingRef.current));
     }
-
-    const data = await res.json();
-    setQuestions((qs) =>
-      qs.map((q) =>
-        q.id === id
-          ? { ...q, votes: data.score, userVote: data.userVote }
-          : q
-      )
-    );
   }
 
   async function loadMore() {
     setLoading(true);
-
-    const res = await fetch(
-      questionsUrl("", voterId ?? undefined, questions.length)
-    );
-
-    const data = await res.json();
-
-    setQuestions((qs) => [
-      ...qs,
-      ...(data.questions ?? []).map((q: Question) => ({
-        ...q,
-        userVote: q.userVote ?? null,
-      })),
-    ]);
-
-    setHasMore(data.hasMore);
+    await refreshQuestions({ offset: questions.length });
     setLoading(false);
   }
 
@@ -283,9 +363,10 @@ export default function QuestionsList({
               <button
                 type="button"
                 onClick={() => vote(q.id, "up")}
+                disabled={votingIds.has(q.id)}
                 aria-label="Upvote"
                 aria-pressed={q.userVote === 1}
-                className={`rounded-md border px-3 py-1 font-mono ${
+                className={`rounded-md border px-3 py-1 font-mono disabled:opacity-50 ${
                   q.userVote === 1
                     ? "border-green-600 bg-green-50 text-green-700"
                     : ""
@@ -301,9 +382,10 @@ export default function QuestionsList({
               <button
                 type="button"
                 onClick={() => vote(q.id, "down")}
+                disabled={votingIds.has(q.id)}
                 aria-label="Downvote"
                 aria-pressed={q.userVote === -1}
-                className={`rounded-md border px-3 py-1 font-mono ${
+                className={`rounded-md border px-3 py-1 font-mono disabled:opacity-50 ${
                   q.userVote === -1
                     ? "border-red-600 bg-red-50 text-red-700"
                     : ""

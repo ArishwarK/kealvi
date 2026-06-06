@@ -1,5 +1,9 @@
 import { supabase } from "@/lib/supabase";
-import { getQuestionsPage, searchQuestions } from "@/lib/questions";
+import {
+  getQuestionsByIds,
+  getQuestionsPage,
+  searchQuestions,
+} from "@/lib/questions";
 
 const PAGE_SIZE = 10;
 
@@ -7,6 +11,13 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const q = searchParams.get("q")?.trim();
   const voterId = searchParams.get("voterId")?.trim() || undefined;
+  const idsParam = searchParams.get("ids")?.trim();
+
+  if (idsParam) {
+    const ids = idsParam.split(",").map((id) => id.trim()).filter(Boolean);
+    const questions = await getQuestionsByIds(ids, voterId);
+    return Response.json({ questions, hasMore: false });
+  }
 
   if (q) {
     const questions = await searchQuestions(q, PAGE_SIZE, voterId);

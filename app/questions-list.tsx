@@ -8,7 +8,41 @@ type Question = {
   body: string;
   author: string | null;
   votes: number;
+  userVote: 1 | -1 | null;
 };
+
+type VoteDirection = "up" | "down";
+
+function applyVoteOptimistic(
+  question: Question,
+  direction: VoteDirection
+): Question {
+  const requested = direction === "up" ? 1 : -1;
+  const { userVote, votes } = question;
+
+  if (userVote === null) {
+    return { ...question, votes: votes + requested, userVote: requested };
+  }
+
+  if (userVote === requested) {
+    return { ...question, votes: votes - requested, userVote: null };
+  }
+
+  return {
+    ...question,
+    votes: votes - userVote + requested,
+    userVote: requested,
+  };
+}
+
+function questionsUrl(query: string, voterId?: string, offset?: number) {
+  const params = new URLSearchParams();
+  if (query) params.set("q", query);
+  if (offset !== undefined) params.set("offset", String(offset));
+  if (voterId) params.set("voterId", voterId);
+  const qs = params.toString();
+  return qs ? `/api/questions?${qs}` : "/api/questions";
+}
 
 export default function QuestionsList({
   initialQuestions,
@@ -17,7 +51,12 @@ export default function QuestionsList({
   initialQuestions: Question[];
   initialHasMore: boolean;
 }) {
-  const [questions, setQuestions] = useState(initialQuestions);
+  const [questions, setQuestions] = useState(() =>
+    initialQuestions.map((q) => ({
+      ...q,
+      userVote: q.userVote ?? null,
+    }))
+  );
   const [draft, setDraft] = useState("");
   const [query, setQuery] = useState("");
   const [hasMore, setHasMore] = useState(initialHasMore);
@@ -25,66 +64,46 @@ export default function QuestionsList({
   const [improving, setImproving] = useState(false);
   const [improveError, setImproveError] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  const [voterId, setVoterId] = useState<string | null>(null);
 
   useEffect(() => {
+    setVoterId(getVoterId());
     setHydrated(true);
   }, []);
 
-  // Auto refresh every 5 seconds
+  async function fetchQuestions(url: string) {
+    const res = await fetch(url);
+    const data = await res.json();
+    setQuestions(
+      (data.questions ?? []).map((q: Question) => ({
+        ...q,
+        userVote: q.userVote ?? null,
+      }))
+    );
+    setHasMore(data.hasMore ?? false);
+  }
+
+  // Auto refresh every 2 seconds
   useEffect(() => {
-    const interval = setInterval(async () => {
-      const url = query
-        ? `/api/questions?q=${encodeURIComponent(query)}`
-        : "/api/questions";
+    if (!voterId) return;
 
-      const res = await fetch(url);
-      const data = await res.json();
-
-      setQuestions(data.questions);
-      setHasMore(data.hasMore);
+    const interval = setInterval(() => {
+      fetchQuestions(questionsUrl(query, voterId));
     }, 2000);
 
     return () => clearInterval(interval);
-  }, [query]);
+  }, [query, voterId]);
 
-  // Search
+  // Search debounce
   useEffect(() => {
-    const id = setTimeout(async () => {
-      const url = query
-        ? `/api/questions?q=${encodeURIComponent(query)}`
-        : "/api/questions";
+    if (!voterId) return;
 
-      const res = await fetch(url);
-      const data = await res.json();
-
-      setQuestions(data.questions);
-      setHasMore(data.hasMore);
+    const id = setTimeout(() => {
+      fetchQuestions(questionsUrl(query, voterId));
     }, 300);
 
     return () => clearTimeout(id);
-  }, [query]);
-
-  useEffect(() => {
-  let fetching = false;
-
-  const interval = setInterval(async () => {
-    if (fetching) return;
-
-    fetching = true;
-
-    try {
-      const res = await fetch("/api/questions");
-      const data = await res.json();
-
-      setQuestions(data.questions);
-      setHasMore(data.hasMore);
-    } finally {
-      fetching = false;
-    }
-  }, 2000);
-
-  return () => clearInterval(interval);
-}, []);
+  }, [query, voterId]);
 
   async function improveDraft() {
     if (!draft.trim() || improving) return;
@@ -133,20 +152,24 @@ export default function QuestionsList({
     const created = await res.json();
 
     setQuestions((qs) => [
-      { ...created, votes: 0 },
+      { ...created, votes: 0, userVote: null },
       ...qs,
     ]);
 
     setDraft("");
   }
 
-  async function upvote(id: string) {
+  async function vote(id: string, direction: VoteDirection) {
+    if (!voterId) return;
+
+    let previous: Question | undefined;
+
     setQuestions((qs) =>
-      qs.map((q) =>
-        q.id === id
-          ? { ...q, votes: q.votes + 1 }
-          : q
-      )
+      qs.map((q) => {
+        if (q.id !== id) return q;
+        previous = q;
+        return applyVoteOptimistic(q, direction);
+      })
     );
 
     const res = await fetch(`/api/questions/${id}/vote`, {
@@ -155,33 +178,45 @@ export default function QuestionsList({
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        voterId: getVoterId(),
+        voterId,
+        direction,
       }),
     });
 
     if (!res.ok) {
-      setQuestions((qs) =>
-        qs.map((q) =>
-          q.id === id
-            ? { ...q, votes: q.votes - 1 }
-            : q
-        )
-      );
+      if (previous) {
+        setQuestions((qs) =>
+          qs.map((q) => (q.id === id ? previous! : q))
+        );
+      }
+      return;
     }
+
+    const data = await res.json();
+    setQuestions((qs) =>
+      qs.map((q) =>
+        q.id === id
+          ? { ...q, votes: data.score, userVote: data.userVote }
+          : q
+      )
+    );
   }
 
   async function loadMore() {
     setLoading(true);
 
     const res = await fetch(
-      `/api/questions?offset=${questions.length}`
+      questionsUrl("", voterId ?? undefined, questions.length)
     );
 
     const data = await res.json();
 
     setQuestions((qs) => [
       ...qs,
-      ...data.questions,
+      ...(data.questions ?? []).map((q: Question) => ({
+        ...q,
+        userVote: q.userVote ?? null,
+      })),
     ]);
 
     setHasMore(data.hasMore);
@@ -244,12 +279,39 @@ export default function QuestionsList({
             key={q.id}
             className="flex items-center gap-3 rounded-lg border p-3"
           >
-            <button
-              onClick={() => upvote(q.id)}
-              className="rounded-md border px-3 py-1 font-mono"
-            >
-              ▲ {q.votes}
-            </button>
+            <div className="flex flex-col items-center gap-1">
+              <button
+                type="button"
+                onClick={() => vote(q.id, "up")}
+                aria-label="Upvote"
+                aria-pressed={q.userVote === 1}
+                className={`rounded-md border px-3 py-1 font-mono ${
+                  q.userVote === 1
+                    ? "border-green-600 bg-green-50 text-green-700"
+                    : ""
+                }`}
+              >
+                ▲
+              </button>
+
+              <span className="min-w-[2ch] text-center font-mono text-sm">
+                {q.votes}
+              </span>
+
+              <button
+                type="button"
+                onClick={() => vote(q.id, "down")}
+                aria-label="Downvote"
+                aria-pressed={q.userVote === -1}
+                className={`rounded-md border px-3 py-1 font-mono ${
+                  q.userVote === -1
+                    ? "border-red-600 bg-red-50 text-red-700"
+                    : ""
+                }`}
+              >
+                ▼
+              </button>
+            </div>
 
             <span>{q.body}</span>
           </li>

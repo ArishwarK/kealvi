@@ -6,14 +6,19 @@ const PAGE_SIZE = 10;
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const q = searchParams.get("q")?.trim();
+  const voterId = searchParams.get("voterId")?.trim() || undefined;
 
   if (q) {
-    const questions = await searchQuestions(q, PAGE_SIZE);
+    const questions = await searchQuestions(q, PAGE_SIZE, voterId);
     return Response.json({ questions, hasMore: false });
   }
 
   const offset = Number(searchParams.get("offset") ?? 0);
-  const { questions, hasMore } = await getQuestionsPage(offset, PAGE_SIZE);
+  const { questions, hasMore } = await getQuestionsPage(
+    offset,
+    PAGE_SIZE,
+    voterId
+  );
   return Response.json({ questions, hasMore });
 }
 

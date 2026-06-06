@@ -23,6 +23,7 @@ create table votes (
   id           uuid primary key default gen_random_uuid(),
   question_id  uuid not null references questions(id) on delete cascade,
   voter_id     text not null,
+  value        smallint not null default 1 check (value in (-1, 1)),
   created_at   timestamptz default now(),
   unique (question_id, voter_id)
 );

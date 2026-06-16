@@ -8,26 +8,39 @@ export type QuestionVoteState = {
   userVote: UserVote;
 };
 
-/** Client-side optimistic vote transition (mirrors server toggle/flip rules). */
+/**
+ * Client-side optimistic vote transition.
+ * - No vote → add vote in requested direction
+ * - Same direction again → remove vote (toggle off)
+ * - Opposite direction → just remove existing vote (no flip)
+ * Score is clamped to >= 0.
+ */
 export function applyVoteOptimistic(
   question: QuestionVoteState,
-  direction: VoteDirection
+  direction: VoteDirection,
 ): QuestionVoteState {
   const requested = direction === "up" ? 1 : -1;
   const { userVote, votes } = question;
 
+  let newVotes: number;
+  let newUserVote: UserVote;
+
   if (userVote === null) {
-    return { votes: votes + requested, userVote: requested };
+    // No existing vote → cast new vote
+    newVotes = votes + requested;
+    newUserVote = requested as UserVote;
+  } else {
+    // Already voted → always remove existing vote first
+    newVotes = votes - userVote;
+    newUserVote = null;
+    // Note: we do NOT flip to the opposite direction.
+    // User must click again to vote the other way.
   }
 
-  if (userVote === requested) {
-    return { votes: votes - requested, userVote: null };
-  }
+  // Prevent negative vote counts
+  if (newVotes < 0) newVotes = 0;
 
-  return {
-    votes: votes - userVote + requested,
-    userVote: requested,
-  };
+  return { votes: newVotes, userVote: newUserVote };
 }
 
 /** Merge a poll/page refresh into the current list without dropping loaded rows. */

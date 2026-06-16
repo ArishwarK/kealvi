@@ -239,15 +239,12 @@ export default function QuestionsList({
         userVote: (data.userVote ?? null) as UserVote,
       };
 
+      // Store authoritative result to override any optimistic UI during next poll refresh
       pinnedVotesRef.current.set(id, authoritative);
-
+      // Immediately update UI with authoritative result
       setQuestions((qs) =>
         qs.map((q) => (q.id === id ? { ...q, ...authoritative } : q))
       );
-
-      window.setTimeout(() => {
-        pinnedVotesRef.current.delete(id);
-      }, PINNED_VOTE_MS);
     } catch (error) {
       if (previous) {
         setQuestions((qs) =>

@@ -82,7 +82,7 @@ export async function getQuestionScores(
 
 export async function getQuestionScore(questionId: string): Promise<number> {
   const scores = await getQuestionScores([questionId]);
-  return scores[questionId] ?? 0;
+  return Math.max(scores[questionId] ?? 0, 0);
 }
 
 export async function getUserVote(
@@ -144,22 +144,18 @@ async function castVoteFallback(
     : null;
 
   if (!existing) {
+    // No existing vote → insert new vote
     const { error } = await supabase.from("votes").insert({
       question_id: questionId,
       voter_id: voterId,
       value: requested,
     });
     if (error) throw new Error(error.message);
-  } else if (existingValue === requested) {
+  } else {
+    // Already voted → always remove existing vote (no flip)
     const { error } = await supabase
       .from("votes")
       .delete()
-      .eq("id", existing.id);
-    if (error) throw new Error(error.message);
-  } else {
-    const { error } = await supabase
-      .from("votes")
-      .update({ value: requested })
       .eq("id", existing.id);
     if (error) throw new Error(error.message);
   }

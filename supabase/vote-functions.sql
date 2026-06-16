@@ -5,7 +5,7 @@ returns table (question_id uuid, score bigint)
 language sql
 stable
 as $$
-  select q.id as question_id, coalesce(sum(v.value), 0)::bigint as score
+  select q.id as question_id, GREATEST(coalesce(sum(v.value), 0), 0)::bigint as score
   from unnest(question_ids) as q(id)
   left join votes v on v.question_id = q.id
   group by q.id;
@@ -33,21 +33,21 @@ begin
   into v_existing_id, v_existing_value
   from votes
   where question_id = p_question_id
-    and voter_id = p_voter_id;
+    and voter_id = p_voter_id
+  for update;
 
   if v_existing_id is null then
+    -- No existing vote → insert new vote
     insert into votes (question_id, voter_id, value)
     values (p_question_id, p_voter_id, p_value);
     v_user_vote := p_value;
-  elsif v_existing_value = p_value then
+  else
+    -- Already voted → always remove existing vote (no flip)
     delete from votes where id = v_existing_id;
     v_user_vote := null;
-  else
-    update votes set value = p_value where id = v_existing_id;
-    v_user_vote := p_value;
   end if;
 
-  select coalesce(sum(value), 0)
+  select GREATEST(coalesce(sum(value), 0), 0)
   into v_score
   from votes
   where question_id = p_question_id;
